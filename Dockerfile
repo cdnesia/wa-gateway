@@ -2,6 +2,9 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# Install git — dibutuhkan oleh beberapa dependency Baileys saat npm install
+RUN apk add --no-cache git python3 make g++
+
 COPY package.json ./
 RUN npm install --omit=dev
 
