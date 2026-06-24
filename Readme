@@ -300,10 +300,10 @@ docker compose up -d --build
 
 | Event | Kapan dikirim |
 |---|---|
-| `session.qr` | QR baru tersedia |
-| `session.connected` | Sesi berhasil terhubung |
+| `session.qr`           | QR baru tersedia |
+| `session.connected`    | Sesi berhasil terhubung |
 | `session.disconnected` | Sesi terputus |
-| `message.received` | Pesan masuk diterima |
-| `message.status` | Status pesan berubah (delivered, read) |
+| `message.received`     | Pesan masuk diterima |
+| `message.status`       | Status pesan berubah (delivered, read) |
 
 Gunakan `"events": ["*"]` untuk subscribe semua event.
