@@ -1,0 +1,309 @@
+# WA Gateway — Baileys + Docker
+
+REST API gateway untuk WhatsApp menggunakan library Baileys, dikemas dalam Docker. Mendukung **multi-session** dengan **round-robin rotator** otomatis.
+
+---
+
+## Fitur
+
+- ✅ Multi-session (lebih dari 1 nomor WA)
+- 🔄 Round-robin rotator — pesan dikirim bergantian antar nomor
+- 🔁 Auto-reconnect dengan exponential backoff (unlimited)
+- 📱 QR Scanner di browser (`/scan`)
+- 🔔 Webhook outgoing dengan HMAC signature
+- 🔑 API Key authentication
+- 🐳 Docker ready dengan session persisten
+
+---
+
+## Struktur Project
+
+```
+wa-gateway/
+├── src/
+│   ├── index.js                  # Entry point, setup Express
+│   ├── handlers/
+│   │   ├── whatsapp.js           # WhatsApp client per sesi (Baileys)
+│   │   └── session-manager.js   # Kelola semua sesi + round-robin
+│   ├── middleware/
+│   │   └── auth.js               # API key authentication
+│   ├── routes/
+│   │   ├── message.js            # Endpoint kirim pesan
+│   │   ├── session.js            # Endpoint manajemen multi-sesi
+│   │   ├── qr-page.js            # Halaman QR di browser
+│   │   └── webhook.js            # Endpoint konfigurasi webhook
+│   └── utils/
+│       ├── logger.js             # Logger (pino)
+│       └── webhook.js            # Helper kirim webhook
+├── sessions/                     # Folder session Baileys (di-volume)
+├── .env.example
+├── Dockerfile
+├── docker-compose.yml
+└── package.json
+```
+
+---
+
+## Setup & Deployment
+
+### 1. Konfigurasi environment
+
+```bash
+cp .env.example .env
+nano .env
+```
+
+Isi minimal:
+
+```env
+API_KEY=your-secret-api-key-here
+SESSIONS=nomor1,nomor2        # nama sesi, bebas — pisah koma
+```
+
+### 2. Build dan jalankan
+
+```bash
+docker compose up -d --build
+```
+
+### 3. Scan QR Code
+
+Buka browser, akses halaman semua sesi:
+
+```
+http://localhost:3000/scan
+```
+
+Scan per sesi:
+
+```
+http://localhost:3000/scan/nomor1
+http://localhost:3000/scan/nomor2
+```
+
+Halaman akan **auto-refresh** setiap 30 detik selama menunggu scan.
+
+---
+
+## API Endpoints
+
+### Public (tanpa auth)
+
+| Method | Endpoint          | Deskripsi                        |
+|--------|-------------------|----------------------------------|
+| GET    | `/health`         | Health check + status semua sesi |
+| GET    | `/scan`           | Halaman QR semua sesi (browser)  |
+| GET    | `/scan/:sessionId`| Halaman QR sesi tertentu         |
+
+### Protected — butuh header `X-API-Key: <your-key>`
+
+#### Session
+
+| Method | Endpoint                        | Deskripsi                    |
+|--------|---------------------------------|------------------------------|
+| GET    | `/api/session`                  | List semua sesi              |
+| POST   | `/api/session/add`              | Tambah sesi baru             |
+| GET    | `/api/session/:sessionId/status`| Status sesi tertentu         |
+| DELETE | `/api/session/:sessionId`       | Hapus sesi                   |
+
+#### Message
+
+| Method | Endpoint                       | Deskripsi                         |
+|--------|--------------------------------|-----------------------------------|
+| POST   | `/api/message/send-text`       | Kirim pesan teks                  |
+| POST   | `/api/message/send-image`      | Kirim gambar (URL atau base64)    |
+| POST   | `/api/message/send-document`   | Kirim dokumen/file                |
+| POST   | `/api/message/check-number`    | Cek nomor terdaftar di WA         |
+
+> Semua endpoint message mendukung field opsional `sessionId`. Jika tidak diisi, otomatis **round-robin**.
+
+#### Webhook
+
+| Method | Endpoint               | Deskripsi                    |
+|--------|------------------------|------------------------------|
+| POST   | `/api/webhook/set`     | Set URL webhook              |
+| GET    | `/api/webhook/config`  | Lihat konfigurasi webhook    |
+| DELETE | `/api/webhook/remove`  | Hapus webhook                |
+
+---
+
+## Contoh Request
+
+### Tambah Sesi Baru
+
+```bash
+curl -X POST http://localhost:3000/api/session/add \
+  -H "X-API-Key: your-secret-api-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{"sessionId": "nomor1"}'
+```
+
+### Kirim Teks — Round-Robin Otomatis
+
+```bash
+curl -X POST http://localhost:3000/api/message/send-text \
+  -H "X-API-Key: your-secret-api-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{"phone": "6281234567890", "message": "Halo dari WA Gateway!"}'
+```
+
+Response menyertakan sesi yang digunakan:
+
+```json
+{
+  "success": true,
+  "message": "Pesan berhasil dikirim",
+  "data": {
+    "messageId": "3EB0xxxxxxxxxxxxxx",
+    "to": "6281234567890",
+    "sentVia": "nomor1"
+  }
+}
+```
+
+### Kirim Teks — Pakai Sesi Spesifik
+
+```bash
+curl -X POST http://localhost:3000/api/message/send-text \
+  -H "X-API-Key: your-secret-api-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{"phone": "6281234567890", "message": "Halo!", "sessionId": "nomor2"}'
+```
+
+### Kirim Gambar dari URL
+
+```bash
+curl -X POST http://localhost:3000/api/message/send-image \
+  -H "X-API-Key: your-secret-api-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone": "6281234567890",
+    "image": "https://example.com/gambar.jpg",
+    "caption": "Caption gambar"
+  }'
+```
+
+### Set Webhook
+
+```bash
+curl -X POST http://localhost:3000/api/webhook/set \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://your-app.com/wa-webhook",
+    "events": ["message.received", "session.connected"],
+    "secret": "webhook-secret-optional"
+  }'
+```
+
+### Payload Webhook (event: message.received)
+
+```json
+{
+  "event": "message.received",
+  "timestamp": "2024-01-01T00:00:00.000Z",
+  "data": {
+    "sessionId": "nomor1",
+    "messageId": "ABCD1234",
+    "from": "6281234567890@s.whatsapp.net",
+    "fromMe": false,
+    "isGroup": false,
+    "pushName": "Nama Pengirim",
+    "messageType": "conversation",
+    "body": "Isi pesan",
+    "timestamp": 1704067200
+  }
+}
+```
+
+---
+
+## Konfigurasi `.env`
+
+```env
+# Server
+PORT=3000
+NODE_ENV=production
+
+# Auth — wajib diisi
+API_KEY=your-secret-api-key-here
+
+# Sesi — nama bebas, pisah koma
+# Folder session akan dibuat otomatis di sessions/<nama>
+SESSIONS=nomor1,nomor2,nomor3
+
+# WhatsApp
+SESSION_PATH=./sessions
+MAX_RECONNECT=0        # 0 = unlimited reconnect
+MARK_ONLINE=false      # true = muncul online di WA
+
+# Logging
+LOG_LEVEL=info
+BAILEYS_LOG_LEVEL=silent
+```
+
+---
+
+## Perilaku Reconnect
+
+| Kondisi | Perilaku |
+|---|---|
+| Internet mati sementara | Reconnect otomatis, backoff 2s → 4s → 8s → ... → 30s |
+| WA server restart | Reconnect langsung tanpa delay |
+| HP di-logout dari WA | Tidak reconnect — scan QR ulang di `/scan/:sessionId` |
+| Berhasil connect ulang | Counter reconnect direset ke 0 |
+| Keepalive | Ping ke WA server setiap 25 detik |
+
+---
+
+## Format Nomor
+
+| Input | Hasil |
+|---|---|
+| `6281234567890` | ✅ Benar |
+| `081234567890` | ✅ Otomatis dikonversi |
+| `+6281234567890` | ✅ Otomatis dikonversi |
+| `120363xxxxxxxx@g.us` | ✅ Untuk kirim ke grup |
+
+---
+
+## Docker Commands
+
+```bash
+# Jalankan
+docker compose up -d --build
+
+# Lihat log semua
+docker compose logs -f
+
+# Lihat log satu container
+docker compose logs -f wa-gateway
+
+# Restart
+docker compose restart wa-gateway
+
+# Stop
+docker compose down
+
+# Reset sesi tertentu (scan ulang)
+docker compose down
+docker run --rm -v wa-gateway_wa_sessions:/data alpine rm -rf /data/nomor1
+docker compose up -d
+
+# Reset semua sesi
+docker volume rm wa-gateway_wa_sessions
+docker compose up -d --build
+```
+
+---
+
+## Webhook Events
+
+| Event | Kapan dikirim |
+|---|---|
+| `session.qr` | QR baru tersedia |
+| `session.connected` | Sesi berhasil terhubung |
+| `session.disconnected` | Sesi terputus |
+| `message.received` | Pesan masuk diterima |
+| `message.status` | Status pesan berubah (delivered, read) |
+
+Gunakan `"events": ["*"]` untuk subscribe semua event.

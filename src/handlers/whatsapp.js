@@ -1,0 +1,241 @@
+import makeWASocket, {
+    DisconnectReason,
+    fetchLatestBaileysVersion,
+    useMultiFileAuthState,
+} from '@whiskeysockets/baileys';
+import { Boom } from '@hapi/boom';
+import pino from 'pino';
+import path from 'path';
+import { createLogger } from '../utils/logger.js';
+import { sendWebhook } from '../utils/webhook.js';
+
+const logger = createLogger('WhatsApp');
+
+export class WhatsAppClient {
+    constructor(sessionId = 'default') {
+        this.sessionId = sessionId;
+        this.sock = null;
+        this.qrCode = null;
+        this.qrBase64 = null;
+        this.connected = false;
+        this.phone = null;
+        this.reconnectAttempts = 0;
+        this.maxReconnect = parseInt(process.env.MAX_RECONNECT || '0');
+        this.sessionPath = path.join(process.env.SESSION_PATH || './sessions', sessionId);
+        this.reconnectTimer = null;
+    }
+
+    async connect() {
+        try {
+            const { version } = await fetchLatestBaileysVersion();
+            logger.info({ sessionId: this.sessionId, version }, 'Connecting...');
+
+            const { state, saveCreds } = await useMultiFileAuthState(this.sessionPath);
+
+            this.sock = makeWASocket({
+                version,
+                auth: state,
+                logger: pino({ level: process.env.BAILEYS_LOG_LEVEL || 'silent' }),
+                generateHighQualityLinkPreview: true,
+                syncFullHistory: false,
+                markOnlineOnConnect: process.env.MARK_ONLINE === 'true',
+                keepAliveIntervalMs: 25_000,
+            });
+
+            this.sock.ev.on('connection.update', async (update) => {
+                await this._handleConnectionUpdate(update, saveCreds);
+            });
+
+            this.sock.ev.on('creds.update', saveCreds);
+
+            this.sock.ev.on('messages.upsert', async ({ messages, type }) => {
+                if (type === 'notify') {
+                    for (const msg of messages) {
+                        await this._handleIncomingMessage(msg);
+                    }
+                }
+            });
+
+            this.sock.ev.on('messages.update', async (updates) => {
+                for (const update of updates) {
+                    await sendWebhook('message.status', { sessionId: this.sessionId, update });
+                }
+            });
+
+        } catch (err) {
+            logger.error({ sessionId: this.sessionId, err }, 'Failed to connect');
+            await this._scheduleReconnect();
+        }
+    }
+
+    async _handleConnectionUpdate(update, saveCreds) {
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+            this.qrCode = qr;
+            this.connected = false;
+
+            const { default: qrcodeTerminal } = await import('qrcode-terminal');
+            console.log(`\n─── QR Session: ${this.sessionId} ───`);
+            qrcodeTerminal.generate(qr, { small: true });
+
+            const QRCode = (await import('qrcode')).default;
+            this.qrBase64 = await QRCode.toDataURL(qr);
+
+            logger.info({ sessionId: this.sessionId }, 'QR ready');
+            await sendWebhook('session.qr', { sessionId: this.sessionId, qrBase64: this.qrBase64 });
+        }
+
+        if (connection === 'open') {
+            this.connected = true;
+            this.qrCode = null;
+            this.qrBase64 = null;
+            this.reconnectAttempts = 0;
+            this.phone = this.sock.user?.id?.split(':')[0] || null;
+
+            if (this.reconnectTimer) {
+                clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = null;
+            }
+
+            logger.info({ sessionId: this.sessionId, phone: this.phone }, 'Connected ✅');
+            await sendWebhook('session.connected', {
+                sessionId: this.sessionId,
+                user: this.sock.user,
+                phone: this.phone,
+            });
+        }
+
+        if (connection === 'close') {
+            this.connected = false;
+            const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+            logger.warn({ sessionId: this.sessionId, statusCode, shouldReconnect }, 'Connection closed');
+            await sendWebhook('session.disconnected', {
+                sessionId: this.sessionId,
+                statusCode,
+                shouldReconnect,
+            });
+
+            if (statusCode === DisconnectReason.loggedOut) {
+                logger.warn({ sessionId: this.sessionId }, 'Logged out — scan QR ulang');
+                return;
+            }
+
+            if (statusCode === DisconnectReason.restartRequired) {
+                this.reconnectAttempts = 0;
+                await this.connect();
+                return;
+            }
+
+            await this._scheduleReconnect();
+        }
+    }
+
+    async _scheduleReconnect() {
+        if (this.maxReconnect > 0 && this.reconnectAttempts >= this.maxReconnect) {
+            logger.error({ sessionId: this.sessionId }, 'Max reconnect reached');
+            return;
+        }
+
+        this.reconnectAttempts++;
+        const delay = Math.min(1000 * 2 ** this.reconnectAttempts, 30_000);
+        logger.info({ sessionId: this.sessionId, attempt: this.reconnectAttempts, delayMs: delay }, 'Reconnecting...');
+
+        this.reconnectTimer = setTimeout(async () => {
+            this.reconnectTimer = null;
+            await this.connect();
+        }, delay);
+    }
+
+    async _handleIncomingMessage(msg) {
+        try {
+            if (msg.key.fromMe) return;
+
+            const from = msg.key.remoteJid;
+            const messageType = Object.keys(msg.message || {})[0];
+            const body = this._extractMessageBody(msg);
+            const isGroup = from?.endsWith('@g.us');
+
+            logger.info({ sessionId: this.sessionId, from, messageType }, 'Incoming message');
+
+            await sendWebhook('message.received', {
+                sessionId: this.sessionId,
+                messageId: msg.key.id,
+                from,
+                fromMe: false,
+                isGroup,
+                participant: msg.key.participant || null,
+                pushName: msg.pushName || null,
+                messageType,
+                body,
+                timestamp: msg.messageTimestamp,
+                raw: msg,
+            });
+        } catch (err) {
+            logger.error({ sessionId: this.sessionId, err }, 'Error handling message');
+        }
+    }
+
+    _extractMessageBody(msg) {
+        const m = msg.message;
+        if (!m) return null;
+        return (
+            m.conversation ||
+            m.extendedTextMessage?.text ||
+            m.imageMessage?.caption ||
+            m.videoMessage?.caption ||
+            m.documentMessage?.caption ||
+            null
+        );
+    }
+
+    isConnected() { return this.connected; }
+    getQR() { return this.qrBase64 || this.qrCode; }
+    getPhone() { return this.phone; }
+    getSessionId() { return this.sessionId; }
+
+    _formatJID(phone) {
+        const clean = phone.replace(/[^0-9]/g, '');
+        if (clean.endsWith('@s.whatsapp.net') || clean.endsWith('@g.us')) return clean;
+        return `${clean}@s.whatsapp.net`;
+    }
+
+    async sendText(phone, text) {
+        this._assertConnected();
+        const jid = this._formatJID(phone);
+        const result = await this.sock.sendMessage(jid, { text });
+        return result;
+    }
+
+    async sendImage(phone, imageBuffer, caption = '') {
+        this._assertConnected();
+        const jid = this._formatJID(phone);
+        return await this.sock.sendMessage(jid, { image: imageBuffer, caption });
+    }
+
+    async sendDocument(phone, fileBuffer, filename, mimetype) {
+        this._assertConnected();
+        const jid = this._formatJID(phone);
+        return await this.sock.sendMessage(jid, { document: fileBuffer, fileName: filename, mimetype });
+    }
+
+    async checkNumber(phone) {
+        this._assertConnected();
+        const jid = this._formatJID(phone);
+        const [result] = await this.sock.onWhatsApp(jid);
+        return { exists: result?.exists || false, jid: result?.jid || null };
+    }
+
+    async logout() {
+        if (this.sock) {
+            await this.sock.logout();
+            this.connected = false;
+        }
+    }
+
+    _assertConnected() {
+        if (!this.connected) throw new Error(`Session '${this.sessionId}' belum terhubung`);
+    }
+}
