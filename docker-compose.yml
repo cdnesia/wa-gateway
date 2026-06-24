@@ -1,9 +1,9 @@
 services:
-  wa-gateway:
+  wa_gateway:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: wa-gateway
+    container_name: wa_gateway
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:3000"
@@ -20,7 +20,7 @@ services:
       - wa_sessions:/app/sessions
       - wa_logs:/app/logs
     networks:
-      - wa-network
+      - web_network
     deploy:
       resources:
         limits:
@@ -28,7 +28,8 @@ services:
           cpus: "0.5"
 
 networks:
-  wa-network:
+  web_network:
+    name: web_network
     driver: bridge
 
 volumes:
