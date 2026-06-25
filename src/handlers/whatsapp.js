@@ -271,7 +271,7 @@ export class WhatsAppClient {
     }
 
     isConnected() { return this.connected; }
-    getQR() { return this.qrBase64 || this.qrCode; }
+    getQR() { return this.qrCode; }
     getPhone() { return this.phone; }
     getSessionId() { return this.sessionId; }
 
