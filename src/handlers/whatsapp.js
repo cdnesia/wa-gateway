@@ -3,7 +3,6 @@ import makeWASocket, {
     fetchLatestBaileysVersion,
     useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import path from 'path';
 import { createLogger } from '../utils/logger.js';
@@ -125,31 +124,64 @@ export class WhatsAppClient {
         }
 
         if (connection === 'close') {
-            this.connected = false;
-            this._clearQrTimeout();
-            const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-            logger.warn({ sessionId: this.sessionId, statusCode, shouldReconnect }, 'Connection closed');
-            await sendWebhook('session.disconnected', {
-                sessionId: this.sessionId,
-                statusCode,
-                shouldReconnect,
-            });
-
-            if (statusCode === DisconnectReason.loggedOut) {
-                logger.warn({ sessionId: this.sessionId }, 'Logged out — scan QR ulang');
-                return;
+            try {
+                await this._handleDisconnect(lastDisconnect);
+            } catch (err) {
+                logger.error({ sessionId: this.sessionId, err }, 'Error handling disconnect — force reconnect');
+                await this._forceReconnect();
             }
-
-            if (statusCode === DisconnectReason.restartRequired) {
-                this.reconnectAttempts = 0;
-                await this.connect();
-                return;
-            }
-
-            await this._scheduleReconnect();
         }
+    }
+
+    async _handleDisconnect(lastDisconnect) {
+        this.connected = false;
+        this._clearQrTimeout();
+
+        // Ekstrak status code — dari Boom, error mentah, atau fallback
+        const error = lastDisconnect?.error;
+        const statusCode = error?.output?.statusCode
+            || error?.statusCode
+            || (error ? 500 : 0)
+            || 0;
+
+        // Alasan disconnect yang memerlukan hapus auth & QR baru:
+        const needsNewAuth = [
+            DisconnectReason.loggedOut,          // 401 — user logout dari HP
+            DisconnectReason.badSession,         // 500 — session invalid
+            DisconnectReason.forbidden,          // 403 — akun diblokir/detect spam
+            DisconnectReason.connectionReplaced, // 440 — session dipakai di device lain
+            DisconnectReason.multideviceMismatch,// 411 — multi-device mismatch
+        ].includes(statusCode);
+
+        logger.warn({
+            sessionId: this.sessionId,
+            statusCode,
+            needsNewAuth,
+            errorMessage: error?.message || '(no message)',
+        }, 'Connection closed');
+
+        await sendWebhook('session.disconnected', {
+            sessionId: this.sessionId,
+            statusCode,
+            needsNewAuth,
+        });
+
+        // Force hapus auth → QR baru
+        if (needsNewAuth) {
+            logger.warn({ sessionId: this.sessionId, statusCode }, 'Auth invalid — regenerating QR...');
+            await this._forceReconnect();
+            return;
+        }
+
+        // WA server restart — reconnect langsung tanpa hapus auth
+        if (statusCode === DisconnectReason.restartRequired) {
+            this.reconnectAttempts = 0;
+            await this.connect();
+            return;
+        }
+
+        // Status code tidak dikenal / internet putus / timeout → reconnect dengan backoff
+        await this._scheduleReconnect();
     }
 
     async _scheduleReconnect() {

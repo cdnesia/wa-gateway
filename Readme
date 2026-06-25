@@ -257,7 +257,8 @@ BAILEYS_LOG_LEVEL=silent
 | WA server restart | Reconnect langsung tanpa delay |
 | QR tidak muncul > 60 detik | Force hapus auth + generate QR baru |
 | Max reconnect tercapai | Force hapus auth + mulai dari awal |
-| HP di-logout dari WA | Tidak reconnect — scan QR ulang di `/scan/:sessionId` |
+| HP di-logout dari WA | Hapus auth otomatis + generate QR baru |
+| Session invalid / forbidden / multi-device mismatch | Hapus auth otomatis + generate QR baru |
 | Berhasil connect ulang | Counter reconnect direset ke 0 |
 | Keepalive | Ping ke WA server setiap 25 detik |
 
