@@ -9,7 +9,7 @@ REST API gateway untuk WhatsApp menggunakan library Baileys, dikemas dalam Docke
 - ✅ Multi-session (lebih dari 1 nomor WA)
 - 🔄 Round-robin rotator — pesan dikirim bergantian antar nomor
 - 🔁 Auto-reconnect dengan exponential backoff + force QR regenerate
-- 📱 QR Scanner di browser (`/scan`)
+- 📱 QR Code via API & Terminal (CLI)
 - 🔔 Webhook outgoing dengan HMAC signature
 - 🔑 API Key authentication
 - 🛡️ Rate limiting + Helmet security headers + CORS
@@ -30,8 +30,7 @@ wa-gateway/
 │   │   └── auth.js               # API key authentication
 │   ├── routes/
 │   │   ├── message.js            # Endpoint kirim pesan
-│   │   ├── session.js            # Endpoint manajemen multi-sesi
-│   │   ├── qr-page.js            # Halaman QR di browser
+│   │   ├── session.js            # Endpoint manajemen multi-sesi + QR API
 │   │   └── webhook.js            # Endpoint konfigurasi webhook
 │   └── utils/
 │       ├── logger.js             # Logger (pino)
@@ -69,20 +68,31 @@ docker compose up -d --build
 
 ### 3. Scan QR Code
 
-Buka browser, akses halaman semua sesi:
+QR muncul otomatis di **terminal/logs** saat sesi dibuat. Selain itu bisa ambil via API:
 
-```
-http://localhost:3000/scan
-```
-
-Scan per sesi:
-
-```
-http://localhost:3000/scan/nomor1
-http://localhost:3000/scan/nomor2
+```bash
+# Ambil QR dalam format base64 + terminal
+curl http://localhost:3000/api/session/nomor1/qr \
+  -H "X-API-Key: your-secret-api-key-here"
 ```
 
-Halaman akan **auto-refresh** setiap 30 detik selama menunggu scan.
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "sessionId": "nomor1",
+    "connected": false,
+    "qrAvailable": true,
+    "qrBase64": "data:image/png;base64,iVBOR...",
+    "qrTerminal": "▄▄▄▄▄▄▄▄▄▄ ..."
+  }
+}
+```
+
+- `qrBase64` — bisa di-render jadi gambar di Postman atau tool apa pun
+- `qrTerminal` — teks ASCII, langsung terlihat di terminal
 
 ---
 
@@ -93,8 +103,6 @@ Halaman akan **auto-refresh** setiap 30 detik selama menunggu scan.
 | Method | Endpoint          | Deskripsi                        |
 |--------|-------------------|----------------------------------|
 | GET    | `/health`         | Health check + status semua sesi |
-| GET    | `/scan`           | Halaman QR semua sesi (browser)  |
-| GET    | `/scan/:sessionId`| Halaman QR sesi tertentu         |
 
 ### Protected — butuh header `X-API-Key: <your-key>`
 
@@ -105,6 +113,7 @@ Halaman akan **auto-refresh** setiap 30 detik selama menunggu scan.
 | GET    | `/api/session`                  | List semua sesi              |
 | POST   | `/api/session/add`              | Tambah sesi baru             |
 | GET    | `/api/session/:sessionId/status`| Status sesi tertentu         |
+| GET    | `/api/session/:sessionId/qr`    | Ambil QR code (base64+ascii) |
 | DELETE | `/api/session/:sessionId`       | Hapus sesi                   |
 
 #### Message
@@ -137,6 +146,13 @@ curl -X POST http://localhost:3000/api/session/add \
   -H "X-API-Key: your-secret-api-key-here" \
   -H "Content-Type: application/json" \
   -d '{"sessionId": "nomor1"}'
+```
+
+### Ambil QR Code
+
+```bash
+curl http://localhost:3000/api/session/nomor1/qr \
+  -H "X-API-Key: your-secret-api-key-here"
 ```
 
 ### Kirim Teks — Round-Robin Otomatis

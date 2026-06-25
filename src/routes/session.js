@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import QRCode from 'qrcode';
 import { sessionManager } from '../handlers/session-manager.js';
 
 const router = Router();
@@ -24,10 +25,58 @@ router.post('/add', async (req, res) => {
 
     try {
         await sessionManager.addSession(sessionId);
-        res.json({ success: true, message: `Session '${sessionId}' ditambahkan, scan QR di /scan/${sessionId}` });
+        res.json({ success: true, message: `Session '${sessionId}' ditambahkan. Gunakan GET /api/session/${sessionId}/qr untuk mendapatkan QR code.` });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
+});
+
+// Ambil QR code via API (untuk Postman/CLI)
+router.get('/:sessionId/qr', async (req, res) => {
+    const client = sessionManager.getSession(req.params.sessionId);
+    if (!client) {
+        return res.status(404).json({ success: false, message: 'Session tidak ditemukan' });
+    }
+
+    if (client.isConnected()) {
+        return res.json({
+            success: true,
+            data: {
+                sessionId: req.params.sessionId,
+                connected: true,
+                phone: client.getPhone(),
+                qrAvailable: false,
+            },
+            message: 'Session sudah terhubung, tidak perlu QR.',
+        });
+    }
+
+    const qrString = client.getQR();
+    if (!qrString) {
+        return res.json({
+            success: true,
+            data: {
+                sessionId: req.params.sessionId,
+                connected: false,
+                qrAvailable: false,
+            },
+            message: 'QR belum tersedia, coba lagi dalam beberapa detik.',
+        });
+    }
+
+    const qrBase64 = await QRCode.toDataURL(qrString);
+    const qrTerminal = await QRCode.toString(qrString, { type: 'terminal', small: true });
+
+    res.json({
+        success: true,
+        data: {
+            sessionId: req.params.sessionId,
+            connected: false,
+            qrAvailable: true,
+            qrBase64,
+            qrTerminal,
+        },
+    });
 });
 
 // Status sesi tertentu

@@ -8,7 +8,6 @@ import { authMiddleware } from './middleware/auth.js';
 import messageRoutes from './routes/message.js';
 import sessionRoutes from './routes/session.js';
 import webhookRoutes from './routes/webhook.js';
-import qrPageRoutes from './routes/qr-page.js';
 
 const logger = createLogger('App');
 const app = express();
@@ -40,8 +39,8 @@ const RATE_LIMIT_WINDOW_MS = 60_000;  // 1 menit
 const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT || '60'); // 60 req/menit
 
 app.use((req, res, next) => {
-    // Skip health check dan QR page
-    if (req.path === '/health' || req.path.startsWith('/scan')) return next();
+    // Skip health check
+    if (req.path === '/health') return next();
 
     const ip = req.ip || req.socket.remoteAddress;
     const now = Date.now();
@@ -75,7 +74,6 @@ app.use((req, res, next) => {
 app.use('/api/session', authMiddleware, sessionRoutes);
 app.use('/api/message', authMiddleware, messageRoutes);
 app.use('/api/webhook', webhookRoutes);
-app.use('/scan', qrPageRoutes);
 
 app.get('/health', (req, res) => {
     res.json({
