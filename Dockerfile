@@ -2,14 +2,19 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install git — dibutuhkan oleh beberapa dependency Baileys saat npm install
+# Build tools — hanya untuk compile native addon (dibuang setelah build)
 RUN apk add --no-cache git python3 make g++
 
 COPY package.json ./
-RUN npm install --omit=dev
 
+RUN npm install --omit=dev \
+    && npm cache clean --force \
+    && rm -rf /root/.npm /tmp/* /app/node_modules/.cache 2>/dev/null || true
+
+# ─── Final image ───────────────────────────────────────────────────────────────
 FROM node:20-alpine
 
+# Timezone Jakarta (satu layer saja, tanpa install/uninstall tzdata)
 RUN apk add --no-cache tzdata \
     && cp /usr/share/zoneinfo/Asia/Jakarta /etc/localtime \
     && echo "Asia/Jakarta" > /etc/timezone \
@@ -30,6 +35,7 @@ USER wagateway
 
 EXPOSE 3000
 
+# Gunakan busybox wget (sudah built-in di Alpine) untuk healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD wget -qO- http://localhost:3000/health || exit 1
 

@@ -17,6 +17,8 @@ services:
       - MARK_ONLINE=${MARK_ONLINE:-false}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - BAILEYS_LOG_LEVEL=${BAILEYS_LOG_LEVEL:-silent}
+      - CORS_ORIGIN=${CORS_ORIGIN:-*}
+      - RATE_LIMIT=${RATE_LIMIT:-60}
     volumes:
       - wa_sessions:/app/sessions
       - wa_logs:/app/logs

@@ -1,8 +1,12 @@
 import { Router } from 'express';
 import NodeCache from 'node-cache';
+import { authMiddleware } from '../middleware/auth.js';
 
 const router = Router();
 const webhookCache = new NodeCache({ stdTTL: 0 });
+
+// Semua route webhook butuh auth
+router.use(authMiddleware);
 
 router.post('/set', (req, res) => {
     const { url, events, secret } = req.body;

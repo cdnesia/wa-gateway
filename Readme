@@ -8,10 +8,11 @@ REST API gateway untuk WhatsApp menggunakan library Baileys, dikemas dalam Docke
 
 - ✅ Multi-session (lebih dari 1 nomor WA)
 - 🔄 Round-robin rotator — pesan dikirim bergantian antar nomor
-- 🔁 Auto-reconnect dengan exponential backoff (unlimited)
+- 🔁 Auto-reconnect dengan exponential backoff + force QR regenerate
 - 📱 QR Scanner di browser (`/scan`)
 - 🔔 Webhook outgoing dengan HMAC signature
 - 🔑 API Key authentication
+- 🛡️ Rate limiting + Helmet security headers + CORS
 - 🐳 Docker ready dengan session persisten
 
 ---
@@ -187,6 +188,7 @@ curl -X POST http://localhost:3000/api/message/send-image \
 
 ```bash
 curl -X POST http://localhost:3000/api/webhook/set \
+  -H "X-API-Key: your-secret-api-key-here" \
   -H "Content-Type: application/json" \
   -d '{
     "url": "https://your-app.com/wa-webhook",
@@ -236,6 +238,10 @@ SESSION_PATH=./sessions
 MAX_RECONNECT=0        # 0 = unlimited reconnect
 MARK_ONLINE=false      # true = muncul online di WA
 
+# Security
+CORS_ORIGIN=*          # domain yang diizinkan, * = semua
+RATE_LIMIT=60          # maks request per menit per IP
+
 # Logging
 LOG_LEVEL=info
 BAILEYS_LOG_LEVEL=silent
@@ -249,6 +255,8 @@ BAILEYS_LOG_LEVEL=silent
 |---|---|
 | Internet mati sementara | Reconnect otomatis, backoff 2s → 4s → 8s → ... → 30s |
 | WA server restart | Reconnect langsung tanpa delay |
+| QR tidak muncul > 60 detik | Force hapus auth + generate QR baru |
+| Max reconnect tercapai | Force hapus auth + mulai dari awal |
 | HP di-logout dari WA | Tidak reconnect — scan QR ulang di `/scan/:sessionId` |
 | Berhasil connect ulang | Counter reconnect direset ke 0 |
 | Keepalive | Ping ke WA server setiap 25 detik |
