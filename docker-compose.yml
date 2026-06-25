@@ -8,14 +8,15 @@ services:
     ports:
       - "${PORT:-3000}:3000"
     environment:
-      - NODE_ENV=production
-      - PORT=3000
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=${PORT:-3000}
       - API_KEY=${API_KEY}
-      - SESSION_PATH=/app/sessions
-      - MAX_RECONNECT=${MAX_RECONNECT:-5}
+      - SESSION_PATH=${SESSION_PATH:-/app/sessions}
+      - SESSIONS=${SESSIONS:-default}
+      - MAX_RECONNECT=${MAX_RECONNECT:-0}
       - MARK_ONLINE=${MARK_ONLINE:-false}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - BAILEYS_LOG_LEVEL=silent
+      - BAILEYS_LOG_LEVEL=${BAILEYS_LOG_LEVEL:-silent}
     volumes:
       - wa_sessions:/app/sessions
       - wa_logs:/app/logs
