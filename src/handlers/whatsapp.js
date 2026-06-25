@@ -27,10 +27,26 @@ export class WhatsAppClient {
 
     async connect() {
         try {
+            // Reset QR state so browser shows "initializing" instead of stale QR
+            this.qrCode = null;
+            this.qrBase64 = null;
+            this.connected = false;
+
             const { version } = await fetchLatestBaileysVersion();
             logger.info({ sessionId: this.sessionId, version }, 'Connecting...');
 
             const { state, saveCreds } = await useMultiFileAuthState(this.sessionPath);
+
+            // Timeout: jika dalam 60 detik tidak ada QR atau koneksi, hapus auth & coba ulang
+            this._clearQrTimeout();
+            this._qrTimeout = setTimeout(() => {
+                if (!this.connected && !this.qrCode) {
+                    logger.warn({ sessionId: this.sessionId }, 'No QR received within 60s — clearing auth and reconnecting');
+                    this._clearQrTimeout();
+                    this._forceReconnect().catch(err =>
+                        logger.error({ sessionId: this.sessionId, err }, 'Force reconnect failed'));
+                }
+            }, 60_000);
 
             this.sock = makeWASocket({
                 version,
@@ -74,6 +90,7 @@ export class WhatsAppClient {
         if (qr) {
             this.qrCode = qr;
             this.connected = false;
+            this._clearQrTimeout();
 
             const { default: qrcodeTerminal } = await import('qrcode-terminal');
             console.log(`\n─── QR Session: ${this.sessionId} ───`);
@@ -92,6 +109,7 @@ export class WhatsAppClient {
             this.qrBase64 = null;
             this.reconnectAttempts = 0;
             this.phone = this.sock.user?.id?.split(':')[0] || null;
+            this._clearQrTimeout();
 
             if (this.reconnectTimer) {
                 clearTimeout(this.reconnectTimer);
@@ -108,6 +126,7 @@ export class WhatsAppClient {
 
         if (connection === 'close') {
             this.connected = false;
+            this._clearQrTimeout();
             const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
@@ -135,7 +154,8 @@ export class WhatsAppClient {
 
     async _scheduleReconnect() {
         if (this.maxReconnect > 0 && this.reconnectAttempts >= this.maxReconnect) {
-            logger.error({ sessionId: this.sessionId }, 'Max reconnect reached');
+            logger.warn({ sessionId: this.sessionId }, 'Max reconnect reached — trying forced clean reconnect');
+            await this._forceReconnect();
             return;
         }
 
@@ -147,6 +167,33 @@ export class WhatsAppClient {
             this.reconnectTimer = null;
             await this.connect();
         }, delay);
+    }
+
+    _clearQrTimeout() {
+        if (this._qrTimeout) {
+            clearTimeout(this._qrTimeout);
+            this._qrTimeout = null;
+        }
+    }
+
+    async _forceReconnect() {
+        // Tutup socket lama
+        if (this.sock) {
+            try { this.sock.end(); } catch (_) { /* ignore */ }
+            this.sock = null;
+        }
+
+        // Hapus file auth agar Baileys dipaksa generate QR baru
+        const fs = await import('fs/promises');
+        try {
+            await fs.rm(this.sessionPath, { recursive: true, force: true });
+            logger.info({ sessionId: this.sessionId }, 'Auth files deleted — will generate new QR');
+        } catch (err) {
+            logger.error({ sessionId: this.sessionId, err }, 'Failed to delete auth files');
+        }
+
+        this.reconnectAttempts = 0;
+        await this.connect();
     }
 
     async _handleIncomingMessage(msg) {
