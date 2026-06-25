@@ -1,8 +1,9 @@
 import { Router } from 'express';
-import QRCode from 'qrcode';
 import { sessionManager } from '../handlers/session-manager.js';
+import { createLogger } from '../utils/logger.js';
 
 const router = Router();
+const logger = createLogger('SessionRoutes');
 
 // List semua sesi
 router.get('/', (req, res) => {
@@ -51,8 +52,11 @@ router.get('/:sessionId/qr', async (req, res) => {
         });
     }
 
-    const qrString = client.getQR();
-    if (!qrString) {
+    const qrBase64 = client.getQR();
+    const qrTerminal = client.getQRTerminal();
+    logger.info({ sessionId: req.params.sessionId, hasQR: !!qrBase64, connected: client.isConnected() }, 'QR requested');
+
+    if (!qrBase64 && !qrTerminal) {
         return res.json({
             success: true,
             data: {
@@ -64,17 +68,14 @@ router.get('/:sessionId/qr', async (req, res) => {
         });
     }
 
-    const qrBase64 = await QRCode.toDataURL(qrString);
-    const qrTerminal = await QRCode.toString(qrString, { type: 'terminal', small: true });
-
     res.json({
         success: true,
         data: {
             sessionId: req.params.sessionId,
             connected: false,
             qrAvailable: true,
-            qrBase64,
-            qrTerminal,
+            qrBase64: qrBase64 || null,
+            qrTerminal: qrTerminal || null,
         },
     });
 });

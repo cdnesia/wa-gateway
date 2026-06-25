@@ -16,6 +16,7 @@ export class WhatsAppClient {
         this.sock = null;
         this.qrCode = null;
         this.qrBase64 = null;
+        this.qrTerminal = null;
         this.connected = false;
         this.phone = null;
         this.reconnectAttempts = 0;
@@ -29,6 +30,7 @@ export class WhatsAppClient {
             // Reset QR state so browser shows "initializing" instead of stale QR
             this.qrCode = null;
             this.qrBase64 = null;
+            this.qrTerminal = null;
             this.connected = false;
 
             const { version } = await fetchLatestBaileysVersion();
@@ -96,7 +98,16 @@ export class WhatsAppClient {
             qrcodeTerminal.generate(qr, { small: true });
 
             const QRCode = (await import('qrcode')).default;
-            this.qrBase64 = await QRCode.toDataURL(qr);
+            try {
+                this.qrBase64 = await QRCode.toDataURL(qr);
+            } catch (_) {
+                this.qrBase64 = null;
+            }
+            try {
+                this.qrTerminal = await QRCode.toString(qr, { type: 'terminal', small: true });
+            } catch (_) {
+                this.qrTerminal = null;
+            }
 
             logger.info({ sessionId: this.sessionId }, 'QR ready');
             await sendWebhook('session.qr', { sessionId: this.sessionId, qrBase64: this.qrBase64 });
@@ -106,6 +117,7 @@ export class WhatsAppClient {
             this.connected = true;
             this.qrCode = null;
             this.qrBase64 = null;
+            this.qrTerminal = null;
             this.reconnectAttempts = 0;
             this.phone = this.sock.user?.id?.split(':')[0] || null;
             this._clearQrTimeout();
@@ -271,7 +283,8 @@ export class WhatsAppClient {
     }
 
     isConnected() { return this.connected; }
-    getQR() { return this.qrCode; }
+    getQR() { return this.qrBase64; }
+    getQRTerminal() { return this.qrTerminal; }
     getPhone() { return this.phone; }
     getSessionId() { return this.sessionId; }
 
